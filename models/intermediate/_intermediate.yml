@@ -1,0 +1,113 @@
+version: 2
+
+models:
+  - name: int_package_physical_truth
+    description: >
+      Pillar 1 resolved against Pillar 2. Takes the warehouse's own measurements
+      and derives what billable weight the contract makes of them: dimensional
+      weight on the negotiated divisor, the contractual billable weight, the
+      rating weight the rate card is looked up at, and the guaranteed delivery
+      commitment measured from physical dock departure. The rate zone is resolved
+      from the recorded ZIP3 pair rather than from the invoice, which is what
+      allows the mart to contradict the carrier instead of restating it.
+    columns:
+      - name: tracking_id
+        tests: [unique, not_null]
+      - name: dim_divisor
+        description: Contracted dimensional divisor in force on the scan date.
+        tests: [not_null]
+      - name: dim_weight_lbs
+        description: (L x W x H) / contracted divisor.
+        tests: [not_null]
+      - name: billable_weight_expected_lbs
+        description: max(actual scale weight, dimensional weight).
+        tests: [not_null]
+      - name: rating_weight_lbs
+        description: Billable weight rounded up to the next whole pound.
+        tests: [not_null]
+      - name: billable_weight_basis
+        description: Whether dimensional or actual scale weight governs.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['DIMENSIONAL', 'ACTUAL_SCALE']
+      - name: zone
+        description: Rate zone resolved independently from physical geography.
+        tests: [not_null]
+      - name: guaranteed_delivery_timestamp
+        description: Dock departure plus the contracted guaranteed transit hours.
+        tests: [not_null]
+      - name: is_gsr_eligible
+        tests: [not_null]
+
+  - name: int_contract_expectations
+    description: >
+      Pillar 2. What the contract says we owe per package: the rate card base
+      rate at the independently derived service, zone and weight tier, plus fuel
+      at the index for the week the shipment physically moved.
+    columns:
+      - name: tracking_id
+        tests: [unique, not_null]
+      - name: contract_base_rate_usd
+        description: Negotiated base rate for this service, zone and weight tier.
+        tests: [not_null]
+      - name: fuel_surcharge_pct
+        tests: [not_null]
+      - name: expected_fuel_surcharge_usd
+        tests: [not_null]
+      - name: has_rate_card_match
+        description: >
+          False means the tariff does not cover what we shipped, which is an
+          audit finding rather than a data error.
+        tests: [not_null]
+
+  - name: int_billed_accessorials
+    description: >
+      Gate 3 adjudication. Rules each billed accessorial fee authorized or not by
+      applying the contracted tariff's authorization_rule to the WMS delivery
+      address metadata, then collapses the ruling to the invoice.
+    columns:
+      - name: tracking_id
+        tests: [not_null]
+      - name: invoice_number
+        tests: [not_null]
+      - name: billed_accessorial_usd
+        tests: [not_null]
+      - name: authorized_accessorial_usd
+        description: Fees the contract genuinely entitles the carrier to charge.
+        tests: [not_null]
+      - name: unauthorized_accessorial_usd
+        description: Fees billed without a satisfied contractual condition.
+        tests: [not_null]
+
+  - name: int_billed_charges
+    description: >
+      Pillar 3 collapsed to the shipment. Designates the first-billed charge line
+      as primary -- adjudicated by Gates 1, 2, 3 and 5 -- and treats every later
+      line as duplicate exposure adjudicated by Gate 4, so each billed dollar is
+      attributed to exactly one gate.
+    columns:
+      - name: tracking_id
+        tests: [unique, not_null]
+      - name: primary_invoice_number
+        tests: [not_null]
+      - name: primary_source_channel
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['UPS_EDI', 'PORTAL_PDF_AI']
+      - name: billed_total_usd
+        description: Total of the primary charge line only.
+        tests: [not_null]
+      - name: billed_total_all_lines_usd
+        description: Total billed across every channel and invoice.
+        tests: [not_null]
+      - name: duplicate_billed_amount_usd
+        description: Everything billed beyond the primary charge.
+        tests: [not_null]
+      - name: distinct_invoice_number_count
+        tests: [not_null]
+      - name: distinct_source_channel_count
+        tests: [not_null]

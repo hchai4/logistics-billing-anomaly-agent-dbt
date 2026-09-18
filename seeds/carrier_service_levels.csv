@@ -1,0 +1,4 @@
+carrier_code,service_level,guaranteed_transit_hours,is_gsr_eligible,service_description
+UPS,GROUND,120,false,Ground
+UPS,SECOND_DAY_AIR,48,true,Second Day Air
+UPS,NEXT_DAY_AIR,24,true,Next Day Air

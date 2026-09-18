@@ -1,0 +1,58 @@
+name: logistics_billing_audit
+version: 1.0.0
+config-version: 2
+
+profile: logistics_billing_audit
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+quoting:
+  database: false
+  schema: false
+  identifier: false
+
+vars:
+  # ------------------------------------------------------------------------
+  # Audit tolerances. Freight audit is adversarial: every flag raised here
+  # gets argued by a carrier billing rep, so thresholds are deliberately
+  # generous enough to absorb legitimate rounding and narrow enough to catch
+  # real contract violations.
+  # ------------------------------------------------------------------------
+
+  # Gate 1: carriers round billable weight up to the next whole pound, so any
+  # tolerance below 1.0 lb would flag every legitimately rated package.
+  weight_variance_tolerance_lbs: 1.0
+
+  # Gate 2: absorbs half-cent rate-card rounding without hiding real drift.
+  base_rate_variance_tolerance_usd: 0.05
+
+  # Fuel is a percentage of base rate, so it inherits base-rate rounding.
+  fuel_variance_tolerance_usd: 0.25
+
+  # Gate 5: clock skew between carrier scan guns and our WMS.
+  sla_grace_minutes: 15
+
+  # Carrier whose contract governs this audit.
+  audit_carrier_code: UPS
+
+models:
+  logistics_billing_audit:
+    +materialized: view
+    staging:
+      +schema: staging
+    intermediate:
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+
+seeds:
+  logistics_billing_audit:
+    +schema: contract

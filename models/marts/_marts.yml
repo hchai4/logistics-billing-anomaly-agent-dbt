@@ -1,0 +1,191 @@
+version: 2
+
+models:
+  - name: fct_reconciliation_marts
+    description: >
+      The analytical core of the freight audit. Cross-examines three independent
+      data streams -- physical warehouse reality, contractual tariff reality and
+      carrier billed reality -- and applies five deterministic verification gates
+      to prove contract violations rather than merely flag discrepancies.
+
+      Grain: one row per package (tracking_id). Gate flags are independent, so a
+      shipment can carry several proven violations at once.
+
+      Recovery attribution rule: every recoverable dollar is claimed exactly
+      once. Gates 1 and 2 are not independent -- inflating weight pushes a parcel
+      into a higher rate bracket -- so weight inflation dollars are claimed
+      through the base rate variance while Gate 1 stands as the reason code that
+      explains it. Gate 5 supersedes Gates 1 and 2 on the same charge, because a
+      Guaranteed Service Refund already returns 100% of the transportation
+      charge.
+    columns:
+      - name: tracking_id
+        description: Carrier tracking number. Primary key of the audit.
+        tests: [unique, not_null]
+      - name: package_id
+        tests: [unique, not_null]
+
+      # ---- Pillar 1 ----
+      - name: actual_scale_weight_lbs
+        description: Certified in-line scale weight; the carrier's burden to disprove.
+        tests: [not_null]
+      - name: dim_weight_lbs
+        description: (L x W x H) / contracted divisor.
+        tests: [not_null]
+      - name: billable_weight_expected_lbs
+        description: max(actual scale weight, dimensional weight).
+        tests: [not_null]
+      - name: dest_address_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['COMMERCIAL', 'RESIDENTIAL']
+
+      # ---- Pillar 2 ----
+      - name: contract_base_rate_usd
+        description: Rate card base rate at the derived service, zone and weight tier.
+        tests: [not_null]
+      - name: expected_total_cost_usd
+        description: Contract base rate + expected fuel + authorized accessorials.
+        tests: [not_null]
+      - name: guaranteed_delivery_timestamp
+        tests: [not_null]
+
+      # ---- Pillar 3 ----
+      - name: billed_total_all_lines_usd
+        description: Everything the carrier demanded across both channels.
+      - name: has_carrier_invoice
+        description: False means the shipment moved but was never invoiced.
+        tests: [not_null]
+
+      # ---- Gate 1 ----
+      - name: weight_variance_lbs
+        description: billed weight - contractual billable weight.
+      - name: is_weight_inflation
+        description: Variance beyond the 1.0 lb rounding tolerance.
+        tests: [not_null]
+
+      # ---- Gate 2 ----
+      - name: base_rate_variance_usd
+        description: billed base rate - contract base rate.
+      - name: is_base_rate_overcharge
+        description: Variance beyond the $0.05 rounding tolerance.
+        tests: [not_null]
+      - name: is_fuel_surcharge_overcharge
+        description: >
+          Supplementary to Gate 2; fuel is a percentage of base rate so it
+          inflates alongside it.
+        tests: [not_null]
+
+      # ---- Gate 3 ----
+      - name: is_unauthorized_residential_fee
+        description: Residential surcharge billed to a commercial delivery point.
+        tests: [not_null]
+      - name: is_unauthorized_address_correction_fee
+        description: Address correction fee billed on a CASS-verified address.
+        tests: [not_null]
+      - name: is_unauthorized_other_accessorial
+        description: Any other fee whose contractual condition was not satisfied.
+        tests: [not_null]
+
+      # ---- Gate 4 ----
+      - name: is_duplicate_billing_collision
+        description: >
+          More than one distinct invoice number, or presence in both the EDI and
+          portal channels, for one shipment.
+        tests: [not_null]
+      - name: duplicate_billed_amount_usd
+        tests: [not_null]
+
+      # ---- Gate 5 ----
+      - name: delivery_variance_hours
+        description: Hours between the guaranteed commitment and actual delivery.
+      - name: is_sla_delivery_failure
+        description: >
+          GSR-eligible service delivered past its guarantee, net of the clock
+          skew grace window.
+        tests: [not_null]
+
+      # ---- Recovery ----
+      - name: total_recoverable_usd
+        description: >
+          Sum of GSR refund, base rate recovery, fuel recovery, unauthorized
+          accessorials and duplicate billing. Non-overlapping by construction.
+        tests: [not_null]
+      - name: anomaly_codes
+        description: Pipe-delimited reason codes, in gate order.
+      - name: anomaly_count
+        tests: [not_null]
+      - name: audit_status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'CLEAN'
+                  - 'ANOMALY_DETECTED'
+                  - 'AWAITING_INVOICE'
+                  - 'UNRATEABLE_NO_TARIFF_MATCH'
+      - name: dispute_priority
+        description: >
+          Triage by recovery economics. P4 marks a proven violation that cost
+          nothing -- evidence for contract renewal rather than a claim to file.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'P1_FILE_IMMEDIATELY'
+                  - 'P2_FILE_WEEKLY_BATCH'
+                  - 'P3_AGGREGATE_FOR_QBR'
+                  - 'P4_NO_COST_VARIANCE'
+                  - 'REVIEW'
+                  - 'NONE'
+
+  - name: fct_billing_anomalies
+    description: >
+      fct_reconciliation_marts unpivoted to one row per proven violation, with a
+      `dispute_evidence` sentence stating the violation in the terms a carrier
+      billing representative has to answer. This is the model the dispute agent
+      consumes as LLM input.
+
+      Grain: one row per package per anomaly code.
+    columns:
+      - name: anomaly_id
+        description: tracking_id::anomaly_code.
+        tests: [unique, not_null]
+      - name: tracking_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_reconciliation_marts')
+                field: tracking_id
+      - name: gate_number
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+      - name: anomaly_code
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'WEIGHT_INFLATION'
+                  - 'BASE_RATE_OVERCHARGE'
+                  - 'UNAUTHORIZED_RESIDENTIAL_FEE'
+                  - 'UNAUTHORIZED_ADDRESS_CORRECTION_FEE'
+                  - 'UNAUTHORIZED_ACCESSORIAL_OTHER'
+                  - 'DUPLICATE_BILLING_COLLISION'
+                  - 'SLA_DELIVERY_FAILURE_REFUND'
+      - name: recoverable_usd
+        description: >
+          Dollars attributable to this specific violation. Zero for Gate 1, whose
+          dollars are claimed through the resulting rate bracket change.
+        tests: [not_null]
+      - name: dispute_evidence
+        description: Evidence sentence citing physical and contractual proof.
+        tests: [not_null]

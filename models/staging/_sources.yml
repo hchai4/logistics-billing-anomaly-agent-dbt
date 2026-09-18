@@ -1,0 +1,151 @@
+version: 2
+
+sources:
+  - name: source_enterprise
+    description: >
+      Raw landing schema owned by the logistics billing anomaly agent. Pillar 1
+      (physical reality) and Pillar 3 (billed reality) both land here; Pillar 2
+      (contract reality) is version-controlled as dbt seeds instead, because a
+      tariff is a legal document rather than an operational data feed.
+    database: logistics_db
+    schema: source_enterprise
+
+    tables:
+      - name: raw_wms_package_scans
+        description: >
+          Pillar 1. One row per package as measured on the warehouse conveyor:
+          in-line scale weight, cubing-laser dimensions, and the physical dock
+          departure timestamp. This is the ground truth a carrier cannot dispute.
+        columns:
+          - name: package_id
+            description: Warehouse-assigned package identifier.
+            tests:
+              - unique
+              - not_null
+          - name: tracking_id
+            description: Carrier tracking number; the join key across all three pillars.
+            tests:
+              - unique
+              - not_null
+          - name: actual_scale_weight
+            description: Certified in-line scale weight in pounds.
+            tests:
+              - not_null
+          - name: package_length_in
+            description: Longest dimension in inches, from the cubing laser.
+          - name: package_width_in
+            description: Second dimension in inches.
+          - name: package_height_in
+            description: Third dimension in inches.
+          - name: origin_zip
+            description: Shipping facility ZIP, used for zone resolution.
+          - name: dest_zip
+            description: Delivery ZIP, used for zone resolution.
+          - name: dest_address_type
+            description: COMMERCIAL or RESIDENTIAL, from the order management system.
+          - name: dest_address_cass_validated
+            description: >
+              True when USPS CASS software verified the delivery address at label
+              time, which is the evidence that defeats an address correction fee.
+          - name: dock_departure_timestamp
+            description: Physical trailer departure; the clock start for SLA transit.
+          - name: service_level
+            description: Service level we purchased and printed on the label.
+          - name: scan_timestamp
+            description: Conveyor scan time; determines the applicable fuel index week.
+          - name: expected_cost
+            description: >
+              Legacy expected cost retained for the Python agent. Superseded by the
+              rate-card derived expectation in int_contract_expectations.
+
+      - name: raw_edi_ups_invoices
+        description: >
+          Pillar 3, channel A. Automated EDI 210 freight invoice transmissions.
+        columns:
+          - name: edi_record_id
+            description: Unique EDI charge record identifier.
+            tests:
+              - unique
+              - not_null
+          - name: tracking_id
+            tests:
+              - not_null
+          - name: carrier_invoice_id
+            description: Carrier invoice number this charge record belongs to.
+            tests:
+              - not_null
+          - name: billed_weight
+            description: Weight the carrier rated the package at, in pounds.
+          - name: base_rate
+            description: Transportation base charge before fuel and accessorials.
+          - name: fuel_surcharge
+            description: Fuel surcharge in dollars.
+          - name: total_billed_amount
+            description: Base rate plus fuel plus accessorials.
+          - name: service_level_billed
+            description: Service level the carrier claims to have provided.
+          - name: zone_billed
+            description: Rate zone the carrier applied.
+          - name: delivery_timestamp
+            description: Carrier-reported delivery scan; the clock stop for SLA transit.
+          - name: invoice_date
+            tests:
+              - not_null
+
+      - name: raw_portal_extracted_invoices
+        description: >
+          Pillar 3, channel B. Invoice records the AI extraction agent pulled out
+          of carrier portal PDFs and emailed billing adjustments. This channel is
+          where post-hoc rebills show up weeks after the EDI feed already billed.
+        columns:
+          - name: portal_record_id
+            description: Surrogate key assigned on extraction.
+            tests:
+              - unique
+              - not_null
+          - name: tracking_id
+            tests:
+              - not_null
+          - name: invoice_number
+            tests:
+              - not_null
+          - name: carrier_name
+          - name: billed_weight
+          - name: base_charge
+            description: Portal-channel name for the transportation base charge.
+          - name: fuel_surcharge
+          - name: grand_total
+            description: Portal-channel name for the invoice total.
+          - name: extraction_timestamp
+            description: When the AI agent parsed the document.
+          - name: extraction_source
+          - name: invoice_date
+          - name: service_level_billed
+          - name: zone_billed
+          - name: delivery_timestamp
+
+      - name: raw_carrier_accessorial_charges
+        description: >
+          Pillar 3 charge-line detail. Accessorials are a repeating group on a
+          freight invoice, so they land at their own grain rather than as an
+          ever-widening set of fee columns on the invoice header.
+        columns:
+          - name: accessorial_charge_id
+            tests:
+              - unique
+              - not_null
+          - name: tracking_id
+            tests:
+              - not_null
+          - name: invoice_number
+            tests:
+              - not_null
+          - name: source_channel
+            description: Channel that delivered this fee line.
+          - name: accessorial_code
+            description: Carrier fee code, e.g. RESIDENTIAL or ADDRESS_CORRECTION.
+            tests:
+              - not_null
+          - name: accessorial_amount
+            tests:
+              - not_null

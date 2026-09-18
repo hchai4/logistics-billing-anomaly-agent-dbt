@@ -1,0 +1,2 @@
+carrier_code,contract_id,dim_divisor,effective_date,expiration_date,billing_currency
+UPS,UPS-NA-2026-Q1,166,2026-01-01,2026-12-31,USD

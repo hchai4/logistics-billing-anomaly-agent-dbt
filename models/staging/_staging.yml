@@ -1,0 +1,148 @@
+version: 2
+
+models:
+  - name: stg_wms_scans
+    description: >
+      Pillar 1. Cleaned and typed warehouse scale scans: one row per physical
+      package, carrying certified scale weight, cubing-laser dimensions,
+      origin/destination geography, delivery-point metadata and the dock
+      departure timestamp that starts the SLA clock.
+    columns:
+      - name: package_id
+        description: Warehouse package identifier.
+        tests: [unique, not_null]
+      - name: tracking_id
+        description: Carrier tracking number, uppercased and stripped of spaces.
+        tests: [unique, not_null]
+      - name: carrier_code
+        tests: [not_null]
+      - name: service_level
+        description: Service level purchased and printed on the label.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: ['GROUND', 'SECOND_DAY_AIR', 'NEXT_DAY_AIR']
+      - name: actual_scale_weight_lbs
+        description: Certified in-line scale weight, pounds.
+        tests: [not_null]
+      - name: package_volume_cuin
+        description: Length x width x height, derived from the recorded dimensions.
+        tests: [not_null]
+      - name: origin_zip3
+        description: First three digits of the origin ZIP; the zone matrix grain.
+        tests: [not_null]
+      - name: dest_zip3
+        description: First three digits of the destination ZIP.
+        tests: [not_null]
+      - name: dest_address_type
+        description: Delivery point classification used to adjudicate Gate 3.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: ['COMMERCIAL', 'RESIDENTIAL']
+      - name: is_dest_address_cass_validated
+        description: True when USPS CASS verified the address at label print time.
+        tests: [not_null]
+      - name: dock_departure_timestamp
+        tests: [not_null]
+      - name: scan_timestamp
+        tests: [not_null]
+
+  - name: stg_edi_invoices
+    description: >
+      Pillar 3, channel A. EDI 210 billing lines cast to the canonical carrier
+      invoice contract and tagged source_channel = 'UPS_EDI'.
+    columns:
+      - name: invoice_line_id
+        tests: [unique, not_null]
+      - name: tracking_id
+        tests: [not_null]
+      - name: invoice_number
+        tests: [not_null]
+      - name: source_channel
+        tests:
+          - accepted_values:
+              arguments:
+                  values: ['UPS_EDI']
+      - name: billed_weight_lbs
+        tests: [not_null]
+      - name: billed_base_rate_usd
+        tests: [not_null]
+      - name: billed_total_usd
+        tests: [not_null]
+
+  - name: stg_portal_invoices
+    description: >
+      Pillar 3, channel B. AI-extracted portal and PDF invoice records cast to
+      the canonical carrier invoice contract and tagged
+      source_channel = 'PORTAL_PDF_AI'.
+    columns:
+      - name: invoice_line_id
+        tests: [unique, not_null]
+      - name: tracking_id
+        tests: [not_null]
+      - name: invoice_number
+        tests: [not_null]
+      - name: source_channel
+        tests:
+          - accepted_values:
+              arguments:
+                  values: ['PORTAL_PDF_AI']
+      - name: billed_weight_lbs
+        tests: [not_null]
+      - name: billed_base_rate_usd
+        tests: [not_null]
+      - name: billed_total_usd
+        tests: [not_null]
+
+  - name: stg_carrier_invoices
+    description: >
+      Pillar 3 unified. UNION ALL of the EDI and portal channels at charge-line
+      grain. Intentionally not deduplicated -- repeated tracking_ids are the
+      Gate 4 signal, not noise.
+    columns:
+      - name: invoice_line_id
+        description: Unique across both channels by construction of the staging keys.
+        tests: [unique, not_null]
+      - name: tracking_id
+        tests: [not_null]
+      - name: invoice_number
+        tests: [not_null]
+      - name: source_channel
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: ['UPS_EDI', 'PORTAL_PDF_AI']
+      - name: billed_total_usd
+        tests: [not_null]
+      - name: invoice_received_at
+        description: Billing chronology anchor used to pick the first-billed line.
+        tests: [not_null]
+
+  - name: stg_carrier_accessorials
+    description: >
+      Pillar 3 fee lines. One row per accessorial charge per invoice, so each fee
+      can be independently ruled authorized or unauthorized by Gate 3.
+    columns:
+      - name: accessorial_charge_id
+        tests: [unique, not_null]
+      - name: tracking_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('stg_wms_scans')
+                  field: tracking_id
+      - name: accessorial_code
+        description: Carrier fee code; must exist in the contracted accessorial tariff.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('carrier_accessorial_tariff')
+                  field: accessorial_code
+      - name: accessorial_amount_usd
+        tests: [not_null]

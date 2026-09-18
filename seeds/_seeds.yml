@@ -1,0 +1,145 @@
+version: 2
+
+seeds:
+  # --------------------------------------------------------------------------
+  # Pillar 2: Contractual Ground Truth.
+  #
+  # A tariff is a legal document, not an operational feed, so it is
+  # version-controlled here. When a carrier disputes a finding, `git log` on
+  # these files is the answer to "which rates were you auditing against?".
+  #
+  # ZIP3 columns are pinned to varchar deliberately: inferred integer types
+  # would silently drop the leading zero on New England ZIPs and would not join
+  # against the varchar ZIP3 derived in stg_wms_scans.
+  # --------------------------------------------------------------------------
+
+  - name: carrier_contract_terms
+    description: >
+      Master contract header. Supplies the negotiated dimensional divisor that
+      Gate 1 rates against. A larger divisor produces a smaller dimensional
+      weight, so the contracted 166 is favorable and the carrier's retail 139
+      default is not -- quietly reverting to 139 is a weight-inflation tactic.
+    config:
+      column_types:
+        carrier_code: varchar(16)
+        contract_id: varchar(64)
+        dim_divisor: integer
+        effective_date: date
+        expiration_date: date
+        billing_currency: varchar(3)
+    columns:
+      - name: carrier_code
+        tests: [unique, not_null]
+      - name: dim_divisor
+        description: Contracted divisor applied to cubic inches.
+        tests: [not_null]
+      - name: effective_date
+        tests: [not_null]
+
+  - name: carrier_service_levels
+    description: >
+      Guaranteed transit commitments per service, and whether the service
+      carries a Guaranteed Service Refund clause. Gate 5 only pursues refunds
+      on GSR-eligible services, because Ground carries no money-back guarantee.
+    config:
+      column_types:
+        carrier_code: varchar(16)
+        service_level: varchar(32)
+        guaranteed_transit_hours: integer
+        is_gsr_eligible: boolean
+        service_description: varchar(64)
+    columns:
+      - name: service_level
+        tests: [unique, not_null]
+      - name: guaranteed_transit_hours
+        description: Hours from dock departure within which delivery is guaranteed.
+        tests: [not_null]
+      - name: is_gsr_eligible
+        tests: [not_null]
+
+  - name: carrier_zone_matrix
+    description: >
+      Origin ZIP3 to destination ZIP3 rate zone assignment. Resolving the zone
+      from physical geography rather than trusting the zone printed on the
+      invoice is what makes Gate 2 independent of the carrier's own claim.
+    config:
+      column_types:
+        carrier_code: varchar(16)
+        origin_zip3: varchar(3)
+        dest_zip3: varchar(3)
+        zone: integer
+    columns:
+      - name: origin_zip3
+        tests: [not_null]
+      - name: dest_zip3
+        tests: [not_null]
+      - name: zone
+        tests: [not_null]
+
+  - name: carrier_rate_card
+    description: >
+      Negotiated base rate per service, zone and billable weight tier. This is
+      the table Gate 2 holds the invoice against.
+    config:
+      column_types:
+        carrier_code: varchar(16)
+        service_level: varchar(32)
+        zone: integer
+        weight_tier_min_lbs: integer
+        weight_tier_max_lbs: integer
+        contract_base_rate_usd: numeric(12, 2)
+        effective_date: date
+        expiration_date: date
+    columns:
+      - name: contract_base_rate_usd
+        tests: [not_null]
+      - name: weight_tier_min_lbs
+        tests: [not_null]
+      - name: weight_tier_max_lbs
+        tests: [not_null]
+
+  - name: carrier_fuel_surcharge_index
+    description: >
+      Weekly fuel surcharge percentage, applied to the base rate. Indexed by the
+      week the shipment moved, not the week it was invoiced.
+    config:
+      column_types:
+        carrier_code: varchar(16)
+        week_start_date: date
+        week_end_date: date
+        fuel_surcharge_pct: numeric(8, 5)
+    columns:
+      - name: week_start_date
+        tests: [unique, not_null]
+      - name: fuel_surcharge_pct
+        tests: [not_null]
+
+  - name: carrier_accessorial_tariff
+    description: >
+      Contracted accessorial fees and, critically, the condition under which
+      each one may legitimately be charged. `authorization_rule` is what turns
+      Gate 3 into a data-driven ruling rather than hardcoded business logic.
+    config:
+      column_types:
+        carrier_code: varchar(16)
+        accessorial_code: varchar(48)
+        contract_amount_usd: numeric(12, 2)
+        authorization_rule: varchar(64)
+        is_fuel_surchargeable: boolean
+    columns:
+      - name: accessorial_code
+        tests: [unique, not_null]
+      - name: contract_amount_usd
+        tests: [not_null]
+      - name: authorization_rule
+        description: >
+          ALWAYS, DEST_ADDRESS_TYPE_RESIDENTIAL, or
+          DEST_ADDRESS_NOT_CASS_VALIDATED.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values:
+                    - 'ALWAYS'
+                    - 'DEST_ADDRESS_TYPE_RESIDENTIAL'
+                    - 'DEST_ADDRESS_NOT_CASS_VALIDATED'

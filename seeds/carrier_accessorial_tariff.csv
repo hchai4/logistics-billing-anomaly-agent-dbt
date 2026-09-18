@@ -1,0 +1,5 @@
+carrier_code,accessorial_code,contract_amount_usd,authorization_rule,is_fuel_surchargeable
+UPS,RESIDENTIAL,5.2,DEST_ADDRESS_TYPE_RESIDENTIAL,false
+UPS,ADDRESS_CORRECTION,19.0,DEST_ADDRESS_NOT_CASS_VALIDATED,false
+UPS,DELIVERY_AREA_SURCHARGE,4.95,ALWAYS,false
+UPS,SATURDAY_DELIVERY,16.0,ALWAYS,false
